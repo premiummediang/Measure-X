@@ -1,0 +1,76 @@
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+import io
+import base64
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///measurements.db'
+db = SQLAlchemy(app)
+
+class Measurement(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    equipment_type = db.Column(db.String(50), nullable=False)
+    value = db.Column(db.Float, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+def get_measurements_by_period(period):
+    now = datetime.utcnow()
+    if period == 'daily':
+        start_time = now - timedelta(days=1)
+    elif period == 'weekly':
+        start_time = now - timedelta(weeks=1)
+    elif period == 'monthly':
+        start_time = now - timedelta(weeks=4)
+    else:
+        return []
+    
+    return Measurement.query.filter(Measurement.timestamp >= start_time).all()
+
+@app.route('/add_measurement', methods=['POST'])
+def add_measurement():
+    data = request.json
+    new_measurement = Measurement(
+        equipment_type=data['equipment_type'],
+        value=data['value']
+    )
+    db.session.add(new_measurement)
+    db.session.commit()
+    return jsonify({'message': 'Measurement added successfully!'}), 201
+
+@app.route('/get_measurements/<period>', methods=['GET'])
+def get_measurements(period):
+    measurements = get_measurements_by_period(period)
+    return jsonify([{ 'id': m.id, 'equipment_type': m.equipment_type, 'value': m.value, 'timestamp': m.timestamp.isoformat()} for m in measurements])
+
+@app.route('/generate_graph/<period>', methods=['GET'])
+def generate_graph(period):
+    measurements = get_measurements_by_period(period)
+    if not measurements:
+        return jsonify({'error': 'No data available'}), 404
+    
+    equipment_types = list(set(m.equipment_type for m in measurements))
+    
+    plt.figure(figsize=(10, 5))
+    for eq in equipment_types:
+        eq_data = [m for m in measurements if m.equipment_type == eq]
+        times = [m.timestamp for m in eq_data]
+        values = [m.value for m in eq_data]
+        plt.plot(times, values, label=eq)
+    
+    plt.xlabel('Time')
+    plt.ylabel('Measurement Value')
+    plt.title(f'{period.capitalize()} Measurements')
+    plt.legend()
+    
+    img = io.BytesIO()
+    plt.savefig(img, format='png')
+    img.seek(0)
+    encoded_img = base64.b64encode(img.getvalue()).decode()
+    return jsonify({'graph': encoded_img})
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True)
