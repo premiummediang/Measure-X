@@ -1,0 +1,121 @@
+mkdir analytical_app
+cd analytical_app
+touch app.py
+mkdir templates static
+from flask import Flask, render_template, request, redirect, url_for
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+import plotly
+import plotly.express as px
+import json
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///measurements.db'
+db = SQLAlchemy(app)
+
+class Measurement(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    equipment_type = db.Column(db.String(50), nullable=False)
+    measurement_value = db.Column(db.Float, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<Measurement {self.id}: {self.equipment_type} - {self.measurement_value}>"
+
+# Create the database
+with app.app_context():
+    db.create_all()
+@app.route('/')
+def index():
+    measurements = Measurement.query.order_by(Measurement.timestamp.desc()).all()
+    return render_template('index.html', measurements=measurements)
+
+@app.route('/add', methods=['POST'])
+def add_measurement():
+    equipment_type = request.form['equipment_type']
+    measurement_value = float(request.form['measurement_value'])
+    new_measurement = Measurement(equipment_type=equipment_type, measurement_value=measurement_value)
+    db.session.add(new_measurement)
+    db.session.commit()
+    return redirect(url_for('index'))
+
+@app.route('/graph')
+def graph():
+    # Fetch data for the last 30 days
+    measurements = Measurement.query.filter(Measurement.timestamp >= datetime.utcnow().replace(day=1)).all()
+    
+    # Prepare data for Plotly
+    data = {
+        'timestamp': [m.timestamp for m in measurements],
+        'value': [m.measurement_value for m in measurements],
+        'equipment': [m.equipment_type for m in measurements]
+    }
+    
+    # Create a line chart
+    fig = px.line(data, x='timestamp', y='value', color='equipment', title='Daily Measurements')
+    graph_json = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+    
+    return render_template('graph.html', graph_json=graph_json)
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytical Equipment Data</title>
+</head>
+<body>
+    <h1>Analytical Equipment Data</h1>
+    <form action="/add" method="POST">
+        <label for="equipment_type">Equipment Type:</label>
+        <select name="equipment_type" id="equipment_type" required>
+            <option value="Precision Scale">Precision Scale</option>
+            <option value="Analytical Balance">Analytical Balance</option>
+            <option value="Weighing Bridge">Weighing Bridge</option>
+            <option value="Flow Meter">Flow Meter</option>
+        </select>
+        <label for="measurement_value">Measurement Value:</label>
+        <input type="number" step="0.01" name="measurement_value" id="measurement_value" required>
+        <button type="submit">Add Measurement</button>
+    </form>
+
+    <h2>Recent Measurements</h2>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Equipment</th>
+                <th>Value</th>
+                <th>Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for measurement in measurements %}
+            <tr>
+                <td>{{ measurement.id }}</td>
+                <td>{{ measurement.equipment_type }}</td>
+                <td>{{ measurement.measurement_value }}</td>
+                <td>{{ measurement.timestamp }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <a href="/graph">View Graphs</a>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Measurement Graphs</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <h1>Measurement Graphs</h1>
+    <div id="graph">{{ graph_json|safe }}</div>
+    <a href="/">Back to Home</a>
+</body>
+</html>
+export FLASK_APP=app.py
+flask run
